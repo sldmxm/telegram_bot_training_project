@@ -122,19 +122,16 @@ def parse_status(homework):
     Возвращает подготовленную для отправки в Telegram строку,
     содержащую один из вердиктов словаря HOMEWORK_STATUSES.
     """
-    try:
-        homework_name = homework['homework_name']
-        homework_status = homework['status']
-        verdict = HOMEWORK_STATUSES.get(homework_status)
-        if not verdict:
-            log_and_report('ERROR',
-                           f'Статуса "{homework_status}" раньше не было')
-        else:
-            return (f'Изменился статус проверки работы '
-                    f'"{homework_name}". {verdict}')
-    except KeyError:
-        log_and_report('ERROR', 'Имена ключей домашней работы изменились')
-    return
+    if 'status' not in homework:
+        raise KeyError("Нет ключа 'status' в ответе API")
+    if 'homework_name' not in homework:
+        raise KeyError("Нет ключа 'homework_name' в ответе API")
+    homework_name = homework['homework_name']
+    homework_status = homework.get('status')
+    if homework_status not in HOMEWORK_STATUSES:
+        raise KeyError(f"Неожиданный статус работы: '{homework_status}'")
+    verdict = HOMEWORK_STATUSES[homework_status]
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def check_tokens():
