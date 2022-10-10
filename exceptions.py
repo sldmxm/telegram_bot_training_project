@@ -1,2 +1,2 @@
-class EnvironmentNotExist(Exception):
+class TelegramTimedOut(Exception):
     pass
