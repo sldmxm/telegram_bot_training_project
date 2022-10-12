@@ -34,10 +34,11 @@ def send_message(message, bot):
             text=message,
         )
     except telegram.error.TelegramError as error:
-        raise TelegramError(
+        logging.error(
             f'Попытка отправить сообщение в Telegram '
             f'закончилась ошибкой "{error}"'
         )
+        raise TelegramError
     else:
         logging.info(f'Сообщение "{message}" отправлено в телеграм')
 
@@ -115,7 +116,6 @@ def parse_status(homework):
 
 def check_tokens():
     """Проверяет наличие переменных окружения."""
-    # не понял, как использовать словарь globals() для проверки (
     return PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID
 
 
@@ -149,18 +149,14 @@ def main():
                     send_message(parse_status(homework), bot)
             else:
                 logging.debug('Нет обновлений, я проверил')
-        except TelegramError as error:
-            logging.error(f'Сбой в работе программы: {error}')
+        except TelegramError:
+            pass
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
             if message != last_error_message:
-                try:
-                    send_message(message, bot)
-                except TelegramError as error:
-                    logging.error(f'Сбой в работе программы: {error}')
-                else:
-                    last_error_message = message
+                send_message(message, bot)
+                last_error_message = message
         else:
             current_timestamp = api_data['current_date'] or current_timestamp
         finally:
@@ -173,9 +169,6 @@ if __name__ == '__main__':
         stream=sys.stdout,
         format=('%(asctime)s '
                 '- %(levelname)s '
-                # учитывая, что почти все логгируется в 170 строке main'а,
-                # получилось не очень информативно, документацию почитал,
-                # простого способа логгировать место ошибки не нашел
                 '- строка %(lineno)d '
                 '- %(funcName)s '
                 '- %(message)s'
