@@ -1,15 +1,13 @@
-import json
 import logging
 import os
 import sys
 from time import time, sleep
-import requests
 
+import requests
 from dotenv import load_dotenv
 import telegram
 
-from exceptions import TelegramTimedOut
-
+from exceptions import TelegramError, APIError
 
 load_dotenv()
 
@@ -17,7 +15,6 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-TIMEOUT = 3
 RETRY_TIME = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
@@ -35,23 +32,14 @@ def send_message(message, bot):
         bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=message,
-            timeout=TIMEOUT
         )
-    except telegram.error.TimedOut:
-        raise TelegramTimedOut(
-            'Не удалось отправить сообщение в Telegram за отведенное время'
-        )
-    except telegram.error.Unauthorized:
-        raise telegram.error.Unauthorized(
-            'Не удалось пройти авторизацию для отправки сообщения в Telegram'
-        )
-    except Exception as error:
-        raise Exception(
-            f'Попытка отправить сообщение закончилась ошибкой "{error}"'
+    except telegram.error.TelegramError as error:
+        raise TelegramError(
+            f'Попытка отправить сообщение в Telegram '
+            f'закончилась ошибкой "{error}"'
         )
     else:
         logging.info(f'Сообщение "{message}" отправлено в телеграм')
-    return
 
 
 def get_api_answer(current_timestamp):
@@ -65,29 +53,21 @@ def get_api_answer(current_timestamp):
             ENDPOINT,
             headers=HEADERS,
             params={'from_date': current_timestamp},
-            timeout=TIMEOUT
         )
         # можно было сделать все через except,
         # но в тестах не предусмотрено использование raise_for_status:
         # "'MockResponseGET' object has no attribute 'raise_for_status'"
-        if api_data.status_code == 200:
-            api_data = api_data.json()
-        else:
-            raise requests.HTTPError(
-                f'Запрос к API ({api_data.url}) '
-                f'вернул ошибку "{api_data.status_code}".'
+        if api_data.status_code != 200:
+            raise APIError(
+                f'Запрос к API ({api_data.url}) вернул ошибку '
+                f'"{api_data.reason}".'
             )
-    except requests.ConnectTimeout:
-        raise requests.ConnectTimeout(
-            f'Ответ API ({api_data.url}) '
-            f'не получен за {TIMEOUT} секунд.'
+        return api_data.json()
+    except requests.exceptions.RequestException as error:
+        raise APIError(
+            f'Запрос к API ({api_data.url}) '
+            f'закончился ошибкой {error}'
         )
-    except json.decoder.JSONDecodeError:
-        raise json.decoder.JSONDecodeError(
-            f'В ответе API ({api_data.url}) не JSON.'
-        )
-    else:
-        return api_data
 
 
 def check_response(response):
@@ -109,7 +89,7 @@ def check_response(response):
             'В ответе API "homeworks" не содержит список')
     if ('current_date' not in response
             or type(response['current_date']) is not int):
-        logging.info(
+        logging.error(
             'В ответе API нет ключа "current_date", содержащего время ответа')
     return response['homeworks']
 
@@ -125,7 +105,7 @@ def parse_status(homework):
         raise KeyError("Нет ключа 'status' в ответе API")
     if 'homework_name' not in homework:
         raise KeyError("Нет ключа 'homework_name' в ответе API")
-    homework_name = homework['homework_name']
+    homework_name = homework.get('homework_name')
     homework_status = homework.get('status')
     if homework_status not in HOMEWORK_VERDICTS:
         raise KeyError(f"Неожиданный статус работы: '{homework_status}'")
@@ -149,7 +129,12 @@ def main():
     - Подождать некоторое RETRY_TIME и сделать новый запрос.
     """
     if not check_tokens():
-        sys.exit('Нет переменных окружения!')
+        sys.exit('Нет переменных окружения: '
+                 + str([token for token in
+                        ['PRACTICUM_TOKEN',
+                         'TELEGRAM_TOKEN',
+                         'TELEGRAM_CHAT_ID']
+                        if not globals()[token]]))
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     last_error_message = ''
@@ -161,16 +146,21 @@ def main():
             homework_statuses = check_response(api_data)
             if len(homework_statuses) > 0:
                 for homework in homework_statuses:
-                    if parse_status(homework):
-                        send_message(parse_status(homework), bot)
+                    send_message(parse_status(homework), bot)
             else:
                 logging.debug('Нет обновлений, я проверил')
+        except TelegramError as error:
+            logging.error(f'Сбой в работе программы: {error}')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
             if message != last_error_message:
-                send_message(message, bot)
-                last_error_message = message
+                try:
+                    send_message(message, bot)
+                except TelegramError as error:
+                    logging.error(f'Сбой в работе программы: {error}')
+                else:
+                    last_error_message = message
         else:
             current_timestamp = api_data['current_date'] or current_timestamp
         finally:
