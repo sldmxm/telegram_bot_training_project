@@ -1,13 +1,14 @@
 import logging
 import os
 import sys
+from http import HTTPStatus
 from time import time, sleep
 
 import requests
 from dotenv import load_dotenv
 import telegram
 
-from exceptions import TelegramError, APIError
+from exceptions import TelegramSendMessageError, APIError, BadCurrentDate
 
 load_dotenv()
 
@@ -34,11 +35,10 @@ def send_message(message, bot):
             text=message,
         )
     except telegram.error.TelegramError as error:
-        logging.error(
+        raise TelegramSendMessageError(
             f'Попытка отправить сообщение в Telegram '
             f'закончилась ошибкой "{error}"'
         )
-        raise TelegramError
     else:
         logging.info(f'Сообщение "{message}" отправлено в телеграм')
 
@@ -58,7 +58,11 @@ def get_api_answer(current_timestamp):
         # можно было сделать все через except,
         # но в тестах не предусмотрено использование raise_for_status:
         # "'MockResponseGET' object has no attribute 'raise_for_status'"
-        if api_data.status_code != 200:
+
+        # вместо проверки статуса и raise - api_data.raise_for_status()
+        # все работает корректно, pytest пишет ошибку
+        # "'MockResponseGET' object has no attribute 'raise_for_status'"
+        if api_data.status_code != HTTPStatus.OK:
             raise APIError(
                 f'Запрос к API ({api_data.url}) вернул ошибку '
                 f'"{api_data.reason}".'
@@ -90,7 +94,7 @@ def check_response(response):
             'В ответе API "homeworks" не содержит список')
     if ('current_date' not in response
             or type(response['current_date']) is not int):
-        logging.error(
+        raise BadCurrentDate(
             'В ответе API нет ключа "current_date", содержащего время ответа')
     return response['homeworks']
 
@@ -129,12 +133,16 @@ def main():
     - Подождать некоторое RETRY_TIME и сделать новый запрос.
     """
     if not check_tokens():
-        sys.exit('Нет переменных окружения: '
-                 + str([token for token in
-                        ['PRACTICUM_TOKEN',
-                         'TELEGRAM_TOKEN',
-                         'TELEGRAM_CHAT_ID']
-                        if not globals()[token]]))
+        lost_token_message = ''.join(
+            ['Нет переменных окружения: ',
+             str([token for token in
+                  ['PRACTICUM_TOKEN',
+                   'TELEGRAM_TOKEN',
+                   'TELEGRAM_CHAT_ID']
+                  if not globals()[token]])]
+        )
+        logging.critical(lost_token_message)
+        sys.exit(lost_token_message)
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     last_error_message = ''
@@ -149,11 +157,21 @@ def main():
                     send_message(parse_status(homework), bot)
             else:
                 logging.debug('Нет обновлений, я проверил')
-        except TelegramError:
-            pass
+        except TelegramSendMessageError as error:
+            logging.error(error)
+        except BadCurrentDate as error:
+            logging.error(error)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
+            # по-хорошему, здесь надо делать еще один try,
+            # писать в лог ошибку отправления,
+            # а заменять последнее отправленное в телегу
+            # только случае успеха
+            # но это не пропускает уже flake8
+            # C901 'main' is too complex
+            # поэтому я на предыдущей итерации
+            # логгирование и унес в send_message
             if message != last_error_message:
                 send_message(message, bot)
                 last_error_message = message
