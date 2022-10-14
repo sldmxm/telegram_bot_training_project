@@ -8,7 +8,12 @@ import requests
 from dotenv import load_dotenv
 import telegram
 
-from exceptions import TelegramSendMessageError, APIError, BadCurrentDate
+from exceptions import (
+    TelegramSendMessageError,
+    APIError,
+    BadCurrentDate,
+    LoggingOnlyError
+)
 
 load_dotenv()
 
@@ -36,7 +41,7 @@ def send_message(message, bot):
         )
     except telegram.error.TelegramError as error:
         raise TelegramSendMessageError(
-            f'Попытка отправить сообщение в Telegram '
+            'Попытка отправить сообщение в Telegram '
             f'закончилась ошибкой "{error}"'
         )
     else:
@@ -55,18 +60,8 @@ def get_api_answer(current_timestamp):
             headers=HEADERS,
             params={'from_date': current_timestamp},
         )
-        # можно было сделать все через except,
-        # но в тестах не предусмотрено использование raise_for_status:
-        # "'MockResponseGET' object has no attribute 'raise_for_status'"
-
-        # вместо проверки статуса и raise - api_data.raise_for_status()
-        # все работает корректно, pytest пишет ошибку
-        # "'MockResponseGET' object has no attribute 'raise_for_status'"
         if api_data.status_code != HTTPStatus.OK:
-            raise APIError(
-                f'Запрос к API ({api_data.url}) вернул ошибку '
-                f'"{api_data.reason}".'
-            )
+            api_data.raise_for_status()
         return api_data.json()
     except requests.exceptions.RequestException as error:
         raise APIError(
@@ -92,10 +87,12 @@ def check_response(response):
     if not isinstance(response['homeworks'], list):
         raise TypeError(
             'В ответе API "homeworks" не содержит список')
-    if ('current_date' not in response
-            or type(response['current_date']) is not int):
+    if 'current_date' not in response:
         raise BadCurrentDate(
-            'В ответе API нет ключа "current_date", содержащего время ответа')
+            'В ответе API нет ключа "current_date"')
+    if type(response['current_date']) is not int:
+        raise BadCurrentDate(
+            'В ответе API ключ "current_date" содержит не время ответа')
     return response['homeworks']
 
 
@@ -121,6 +118,20 @@ def parse_status(homework):
 def check_tokens():
     """Проверяет наличие переменных окружения."""
     return PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID
+
+
+def send_error_message(message, bot):
+    """
+    Отправляет сообщение об ошибке в Telegram.
+    В случае успеха возвращает отправленное сообщение
+    """
+    try:
+        send_message(message, bot)
+    except TelegramSendMessageError as error:
+        logging.error(error)
+    else:
+        return message
+    return
 
 
 def main():
@@ -157,24 +168,16 @@ def main():
                     send_message(parse_status(homework), bot)
             else:
                 logging.debug('Нет обновлений, я проверил')
-        except TelegramSendMessageError as error:
-            logging.error(error)
-        except BadCurrentDate as error:
+        except LoggingOnlyError as error:
             logging.error(error)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
-            # по-хорошему, здесь надо делать еще один try,
-            # писать в лог ошибку отправления,
-            # а заменять последнее отправленное в телегу
-            # только случае успеха
-            # но это не пропускает уже flake8
-            # C901 'main' is too complex
-            # поэтому я на предыдущей итерации
-            # логгирование и унес в send_message
             if message != last_error_message:
-                send_message(message, bot)
-                last_error_message = message
+                last_error_message = (
+                    send_error_message(message, bot)
+                    or last_error_message
+                )
         else:
             current_timestamp = api_data['current_date'] or current_timestamp
         finally:

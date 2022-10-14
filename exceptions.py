@@ -1,4 +1,8 @@
-class TelegramSendMessageError(Exception):
+class LoggingOnlyError(Exception):
+    pass
+
+
+class TelegramSendMessageError(LoggingOnlyError):
     pass
 
 
@@ -6,5 +10,5 @@ class APIError(Exception):
     pass
 
 
-class BadCurrentDate(Exception):
+class BadCurrentDate(LoggingOnlyError):
     pass
