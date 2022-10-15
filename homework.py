@@ -130,8 +130,8 @@ def send_error_message(message, bot):
     except TelegramSendMessageError as error:
         logging.error(error)
     else:
-        return message
-    return
+        return True
+    return False
 
 
 def main():
@@ -174,10 +174,8 @@ def main():
             message = f'Сбой в работе программы: {error}'
             logging.error(message)
             if message != last_error_message:
-                last_error_message = (
-                    send_error_message(message, bot)
-                    or last_error_message
-                )
+                if send_error_message(message, bot):
+                    last_error_message = message
         else:
             current_timestamp = api_data['current_date'] or current_timestamp
         finally:
